@@ -1,0 +1,36 @@
+{
+  "name": "universal-reader",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "typecheck": "vue-tsc -b"
+  },
+  "dependencies": {
+    "@mozilla/readability": "latest",
+    "dompurify": "latest",
+    "idb": "latest",
+    "lucide-vue-next": "latest",
+    "markdown-it": "latest",
+    "pdfjs-dist": "latest",
+    "vue": "latest"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "latest",
+    "@types/mozilla__readability": "latest",
+    "@types/node": "26.1.2",
+    "@vitejs/plugin-vue": "latest",
+    "@vue/test-utils": "latest",
+    "fake-indexeddb": "latest",
+    "jsdom": "27.2.0",
+    "typescript": "5.9.3",
+    "vite": "latest",
+    "vitest": "latest",
+    "vue-tsc": "latest"
+  }
+}
