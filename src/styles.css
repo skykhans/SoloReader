@@ -22,6 +22,45 @@
   text-rendering: optimizeLegibility;
 }
 
+.desktop-print-pages {
+  display: none;
+}
+
+@media print {
+  html:has(.desktop-print-pages),
+  body:has(.desktop-print-pages) {
+    width: auto;
+    height: auto;
+    margin: 0;
+    min-width: 0;
+    overflow: visible;
+    background: white;
+  }
+
+  body:has(.desktop-print-pages) > :not(.desktop-print-pages) {
+    display: none !important;
+  }
+
+  .desktop-print-pages {
+    display: block;
+  }
+
+  .desktop-print-pages > section {
+    break-after: page;
+    overflow: hidden;
+  }
+
+  .desktop-print-pages > section:last-child {
+    break-after: auto;
+  }
+
+  .desktop-print-pages img {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+}
+
 :root[data-theme="paper"] {
   --page: #e7e7e2;
   --paper: #f8f6ef;

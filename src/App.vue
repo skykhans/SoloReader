@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { FileWarning, LoaderCircle } from 'lucide-vue-next'
+import { isTauri } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
+import type { UnlistenFn } from '@tauri-apps/api/event'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import EmptyReader from './components/EmptyReader.vue'
 import NavigationDrawer, { type NavigationTab } from './components/NavigationDrawer.vue'
 import PasswordDialog from './components/PasswordDialog.vue'
@@ -22,6 +26,8 @@ import type {
   SearchHit,
 } from './domain/document'
 import { searchDocument } from './services/search'
+import { selectDesktopDocument, saveDesktopPdf } from './services/desktop'
+import { printDesktopPdf, disposeDesktopPrint } from './services/desktop-print'
 import {
   addBookmark,
   clearReaderSettings,
@@ -85,6 +91,8 @@ let searchGeneration = 0
 let drawerReturnFocus: HTMLElement | null = null
 let passwordReturnFocus: HTMLElement | null = null
 let bookmarkBusy = false
+let desktopCloseListener: UnlistenFn | undefined
+let desktopClosing = false
 const destroyedPdfTasks = new WeakSet<object>()
 
 interface PendingPdfRestore {
@@ -268,11 +276,20 @@ async function destroyDocument(document: ReaderDocument | null) {
   }
 }
 
-function openFilePicker() {
+async function openFilePicker() {
   passwordReturnFocus = document.activeElement instanceof HTMLElement
     ? document.activeElement
     : null
-  fileInput.value?.click()
+  if (isTauri()) {
+    try {
+      const file = await selectDesktopDocument()
+      if (file) await openFile(file)
+    } catch (error) {
+      notify(`无法读取文档：${asError(error).message}`)
+    }
+  } else {
+    fileInput.value?.click()
+  }
 }
 
 async function commitDocument(candidate: ReaderDocument, file: File, token: number) {
@@ -943,9 +960,17 @@ function zoomDocument(delta: -1 | 1) {
   }
 }
 
-function downloadCurrentDocument() {
+async function downloadCurrentDocument() {
   const file = currentFile.value
   if (!file) return
+  if (isTauri()) {
+    try {
+      await saveDesktopPdf(file)
+    } catch (error) {
+      notify(`无法保存 PDF：${asError(error).message}`)
+    }
+    return
+  }
   const url = URL.createObjectURL(file)
   const anchor = document.createElement('a')
   anchor.href = url
@@ -954,9 +979,25 @@ function downloadCurrentDocument() {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-function printCurrentDocument() {
+async function printCurrentDocument() {
   const file = currentFile.value
   if (!file) return
+  if (isTauri()) {
+    const pdf = pagedDocument.value?.pdf
+    if (!pdf || loading.value) return
+    stopAutoScroll()
+    loading.value = true
+    try {
+      await printDesktopPdf(pdf, (page, total) => {
+        loadingMessage.value = `正在准备打印 ${page} / ${total}`
+      })
+    } catch (error) {
+      notify(`无法打印 PDF：${asError(error).message}`)
+    } finally {
+      loading.value = false
+    }
+    return
+  }
   const url = URL.createObjectURL(file)
   const printWindow = window.open(url, '_blank')
   if (!printWindow) {
@@ -973,11 +1014,26 @@ function printCurrentDocument() {
 }
 async function toggleFullscreen() {
   try {
+    if (isTauri()) {
+      const window = getCurrentWindow()
+      const enabled = !await window.isFullscreen()
+      await window.setFullscreen(enabled)
+      fullscreen.value = enabled
+      return
+    }
     if (document.fullscreenElement) await document.exitFullscreen()
     else await document.documentElement.requestFullscreen()
   } catch (error) {
     notify(`无法切换全屏：${asError(error).message}`)
   }
+}
+
+function handleDesktopLink(event: MouseEvent) {
+  if (!isTauri() || !(event.target instanceof Element)) return
+  const anchor = event.target.closest<HTMLAnchorElement>('a[href]')
+  if (!anchor || !/^(https?:|mailto:|tel:)/i.test(anchor.getAttribute('href') ?? '')) return
+  event.preventDefault()
+  void openUrl(anchor.href).catch((error) => notify(`无法打开链接：${asError(error).message}`))
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -988,6 +1044,7 @@ function handleKeydown(event: KeyboardEvent) {
     if (passwordDialogOpen.value) cancelPassword()
     else if (navigationOpen.value) closeNavigation()
     else if (settingsOpen.value) closeSettings()
+    else if (isTauri() && fullscreen.value) void toggleFullscreen()
     else stopAutoScroll(true)
     return
   }
@@ -1058,6 +1115,27 @@ onMounted(async () => {
   window.addEventListener('keydown', handleKeydown)
   document.addEventListener('visibilitychange', handleVisibilityChange)
   document.addEventListener('fullscreenchange', handleFullscreenChange)
+  document.addEventListener('click', handleDesktopLink)
+  if (isTauri()) {
+    try {
+      const window = getCurrentWindow()
+      desktopCloseListener = await window.onCloseRequested(async (event) => {
+        event.preventDefault()
+        if (desktopClosing) return
+        desktopClosing = true
+        stopAutoScroll()
+        await flushPosition()
+        try {
+          await window.destroy()
+        } catch (error) {
+          desktopClosing = false
+          notify(`无法关闭窗口：${asError(error).message}`)
+        }
+      })
+    } catch (error) {
+      notify(`无法初始化桌面窗口：${asError(error).message}`)
+    }
+  }
 })
 
 onBeforeUnmount(() => {
@@ -1070,6 +1148,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeydown)
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   document.removeEventListener('fullscreenchange', handleFullscreenChange)
+  document.removeEventListener('click', handleDesktopLink)
+  desktopCloseListener?.()
+  disposeDesktopPrint()
   void flushPosition()
   void destroyDocument(currentDocument.value)
 })
